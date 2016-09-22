@@ -921,6 +921,16 @@ def latest(module, items, repoq, yum_basecmd, conf_file, en_repos, dis_repos):
 
     return res
 
+def query(module, items, repoq, yum_basecmd, conf_file, en_repos, dis_repos):
+
+    pkgs = []
+    res = {}
+    res['results'] = []
+    res['msg'] = ''
+    res['changed'] = False
+    res['rc'] = 0
+    return res
+
 def ensure(module, state, pkgs, conf_file, enablerepo, disablerepo,
            disable_gpg_check, exclude, repoq):
 
@@ -983,6 +993,8 @@ def ensure(module, state, pkgs, conf_file, enablerepo, disablerepo,
         if disable_gpg_check:
             yum_basecmd.append('--nogpgcheck')
         res = latest(module, pkgs, repoq, yum_basecmd, conf_file, en_repos, dis_repos)
+    elif state == 'query':
+        res = query(module, pkgs, repoq, yum_basecmd, conf_file, en_repos, dis_repos)
     else:
         # should be caught by AnsibleModule argument_spec
         module.fail_json(msg="we should never get here unless this all"
@@ -1009,7 +1021,7 @@ def main():
             name=dict(aliases=['pkg'], type="list"),
             exclude=dict(required=False, default=None),
             # removed==absent, installed==present, these are accepted as aliases
-            state=dict(default='installed', choices=['absent','present','installed','removed','latest']),
+            state=dict(default='query', choices=['absent','present','installed','removed','latest', 'query']),
             enablerepo=dict(),
             disablerepo=dict(),
             list=dict(),

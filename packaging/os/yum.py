@@ -929,6 +929,99 @@ def query(module, items, repoq, yum_basecmd, conf_file, en_repos, dis_repos):
     res['msg'] = ''
     res['changed'] = False
     res['rc'] = 0
+
+    for spec in items:
+        res[spec] = {}
+        pkg = None
+
+        # check if pkgspec is installed
+        # localpkg
+        if spec.endswith('.rpm') and '://' not in spec:
+            # get the pkg name-v-r.arch
+            if not os.path.exists(spec):
+                res['msg'] += "No Package file matching '%s' found on system" % spec
+                module.fail_json(**res)
+
+            nvra = local_nvra(module, spec)
+
+            # look for them in the rpmdb
+            if is_installed(module, repoq, nvra, conf_file, en_repos=en_repos, dis_repos=dis_repos):
+                # if they are there, skip it
+                continue
+            pkg = spec
+
+        # URL
+        elif '://' in spec:
+            # download package so that we can check if it's already installed
+            package = fetch_rpm_from_url(spec, module=module)
+            nvra = local_nvra(module, package)
+            if is_installed(module, repoq, nvra, conf_file, en_repos=en_repos, dis_repos=dis_repos):
+                # if it's there, skip it
+                continue
+            pkg = package
+
+        #groups :(
+        elif spec.startswith('@'):
+            # complete wild ass guess b/c it's a group
+            pkg = spec
+
+
+        # range requires or file-requires or pkgname :(
+        else:
+            # most common case is the pkg is already installed and done
+            # short circuit all the bs - and search for it as a pkg in is_installed
+            # if you find it then we're done
+            if not set(['*','?']).intersection(set(spec)):
+                installed_pkgs = is_installed(module, repoq, spec, conf_file, en_repos=en_repos, dis_repos=dis_repos, is_pkg=True)
+                if installed_pkgs:
+                    res[spec]['status'] = 'installed'
+                    res[spec]['version'] = installed_pkgs[0]
+                    res['results'].append('%s providing %s is installed' % (installed_pkgs[0], spec))
+                    continue
+
+            # look up what pkgs provide this
+            pkglist = what_provides(module, repoq, spec, conf_file, en_repos=en_repos, dis_repos=dis_repos)
+            if not pkglist:
+                res['msg'] += "No Package matching '%s' found available, installed or updated" % spec
+                module.fail_json(**res)
+
+            # if any of the packages are involved in a transaction, fail now
+            # so that we don't hang on the yum operation later
+            conflicts = transaction_exists(pkglist)
+            if len(conflicts) > 0:
+                res['msg'] += "The following packages have pending transactions: %s" % ", ".join(conflicts)
+                module.fail_json(**res)
+
+            # if any of them are installed
+            # then nothing to do
+
+            found = False
+            for this in pkglist:
+                if is_installed(module, repoq, this, conf_file, en_repos=en_repos, dis_repos=dis_repos, is_pkg=True):
+                    found = True
+                    res['results'].append('%s providing %s is already installed' % (this, spec))
+                    break
+
+            # if the version of the pkg you have installed is not in ANY repo, but there are
+            # other versions in the repos (both higher and lower) then the previous checks won't work.
+            # so we check one more time. This really only works for pkgname - not for file provides or virt provides
+            # but virt provides should be all caught in what_provides on its own.
+            # highly irritating
+            if not found:
+                if is_installed(module, repoq, spec, conf_file, en_repos=en_repos, dis_repos=dis_repos):
+                    found = True
+                    res['results'].append('package providing %s is already installed' % (spec))
+
+            if found:
+                continue
+
+            # if not - then pass in the spec as what to install
+            # we could get here if nothing provides it but that's not
+            # the error we're catching here
+            pkg = spec
+
+        pkgs.append(pkg)
+
     return res
 
 def ensure(module, state, pkgs, conf_file, enablerepo, disablerepo,
@@ -1015,13 +1108,14 @@ def main():
     #   list=available
     #   list=repos
     #   list=pkgspec
-
+    print test
+    import pdb; pdb.set_trace()
     module = AnsibleModule(
         argument_spec = dict(
             name=dict(aliases=['pkg'], type="list"),
             exclude=dict(required=False, default=None),
             # removed==absent, installed==present, these are accepted as aliases
-            state=dict(default='query', choices=['absent','present','installed','removed','latest', 'query']),
+            state=dict(default='installed', choices=['absent','present','installed','removed','latest', 'query']),
             enablerepo=dict(),
             disablerepo=dict(),
             list=dict(),
